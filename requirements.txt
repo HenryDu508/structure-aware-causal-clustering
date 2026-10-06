@@ -1,0 +1,10 @@
+# Python 3.10 was used for all experiments.
+# numpy and pandas versions are the ones recorded in the HPC job logs.
+numpy==2.2.6
+pandas==2.3.3
+scipy
+scikit-learn
+networkx
+matplotlib
+joblib
+jupyter
