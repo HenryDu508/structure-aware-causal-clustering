@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-import argparse, random, numpy as np, os, json, pandas as pd
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import argparse, random, json
+import numpy as np, pandas as pd
 
 from data_generation import generate_clustered_data
 from cross_validation_updated import (
     tune_hyperparameters, compute_total_reconstruction_error,
     average_skeleton_accuracy, clustering_overall_metrics
 )
-from algorithm_updated import optimize_dc_admm
+from algorithm_updated import optimize_dc_admm, complete_linkage_clusters
 from NOTEAR import (
     run_notear_experiment_pooled,
     run_notear_experiment_individual,
     run_notear_experiment_cluster,
 )
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
 
 def _to_py(x):
     if isinstance(x, np.ndarray): return x.tolist()
@@ -28,10 +32,11 @@ def save_json(path, obj):
         json.dump(_to_py(obj), f, ensure_ascii=False, indent=2)
 
 def run_dag_dc_admm_experiment(X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth, seed,
+                               lambda1_grid=(0.0001, 0.001, 0.01, 0.1),
                                lambda2_grid=(0.01, 0.001, 0.0001, 0.00001),
                                tau_grid=(0.05, 0.1, 0.4, 0.7)):
     param_grid = {
-        "lambda1": [0.0001, 0.001, 0.01, 0.1],
+        "lambda1": list(lambda1_grid),
         "lambda2": list(lambda2_grid),
         "tau": list(tau_grid),
         "rho1": [0.1],
@@ -72,6 +77,30 @@ def run_dag_dc_admm_experiment(X_list, W_list_gt, W_centers_gt, clusters_gt, lab
         "W_cluster_est_list": _to_py(W_cluster_est_list),
     }
 
+def run_two_step_experiment(individual_results, label_truth, tau):
+    """Two-step baseline: individual NOTEARS DAGs, then complete-linkage clustering cut at tau."""
+    W = np.asarray(individual_results["W_notear_list"], dtype=float)
+    dist = np.linalg.norm(W[:, None] - W[None, :], ord="fro", axis=(2, 3))
+    np.fill_diagonal(dist, 0.0)
+    cluster_sets, labels = complete_linkage_clusters(dist, tau)
+    labels = np.asarray(labels, dtype=int)
+    clusters = [sorted(int(i) for i in c) for c in cluster_sets]
+    consensus = np.stack([W[c].mean(axis=0) for c in clusters], axis=0)
+    return {
+        "method": "individual_notears_then_complete_linkage",
+        "tau": tau,
+        "selected_notears_lambda1": float(individual_results["best_alpha"]),
+        "hierarchical_clustering": {
+            "selected_k": len(clusters),
+            "label_est": labels,
+            "clusters_est_zero_based_subject_indices": clusters,
+            "pairwise_distance_matrix": dist,
+            "cluster_consensus_matrices": consensus,
+            "cluster_consensus_matrix_by_subject": np.stack([consensus[l - 1] for l in labels], axis=0),
+            "clustering_accuracy": clustering_overall_metrics(label_truth, labels),
+        },
+    }
+
 def main():
     p = argparse.ArgumentParser(description="Run experiment for one seed")
     p.add_argument("--seed", type=int, required=True)
@@ -90,8 +119,16 @@ def main():
     # Hyperparameter grids for DAG-DC-ADMM. Defaults give a 64-combination grid.
     # Main two-cluster tables: --lambda2_grid 0.01 0.001 0.0001 0.00001 0.1 (80 combinations).
     # Higher-dimensional setting (d=15): --tau_grid 0.15 0.3 1.2 2.1.
+    p.add_argument("--lambda1_grid", type=float, nargs="+", default=[0.0001, 0.001, 0.01, 0.1])
     p.add_argument("--lambda2_grid", type=float, nargs="+", default=[0.01, 0.001, 0.0001, 0.00001])
     p.add_argument("--tau_grid", type=float, nargs="+", default=[0.05, 0.1, 0.4, 0.7])
+    p.add_argument("--baseline_lambda1_grid", type=float, nargs="+", default=[0.0001, 0.001, 0.01, 0.1],
+                   help="L1 penalty grid for the NOTEARS baselines.")
+    p.add_argument("--two_step_tau", type=float, default=0.7,
+                   help="Dendrogram cut height for the two-step baseline.")
+    p.add_argument("--methods", nargs="+", default=["all"],
+                   choices=["all", "dag_dc_admm", "pooled", "individual", "oracle", "two_step"],
+                   help="Methods to run (default: all).")
     args = p.parse_args()
 
     # Set reproducibility seeds
@@ -136,38 +173,57 @@ def main():
         permute=True
     )
 
-    # Run ADMM Optimization
-    dc_results = run_dag_dc_admm_experiment(X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth, seed,
-                                            lambda2_grid=args.lambda2_grid, tau_grid=args.tau_grid)
-    
-    # Run Baselines (NOTEARS variants)
-    alpha_grid = [1e-4, 1e-3, 1e-2, 1e-1]
-    pooled_results = run_notear_experiment_pooled(X_list, W_list_gt, W_centers_gt, clusters_gt, seed, args.std, alpha_grid, n_folds=3, cv_shuffle=CV_SHUFFLE, cv_random_state=CV_RANDOM_STATE)
-    individual_results = run_notear_experiment_individual(X_list, W_list_gt, W_centers_gt, clusters_gt, seed, args.std, alpha_grid, n_folds=3, cv_shuffle=CV_SHUFFLE, cv_random_state=CV_RANDOM_STATE)
-    cluster_results = run_notear_experiment_cluster(X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth, seed, args.std, alpha_grid, n_folds=3, cv_shuffle=CV_SHUFFLE, cv_random_state=CV_RANDOM_STATE)
-
-    # Save individual algorithm results
-    save_json(os.path.join(out_dir, "summary_notear_pooled_CV.json"), pooled_results)
-    save_json(os.path.join(out_dir, "summary_notear_individual_CV.json"), individual_results)
-    save_json(os.path.join(out_dir, "summary_notear_cluster_CV.json"), cluster_results)
-    save_json(os.path.join(out_dir, "dag_dc_admm_results.json"), dc_results)
-
-    # Consolidated results for reproducibility and metadata tracking
+    methods = {"dag_dc_admm", "pooled", "individual", "oracle", "two_step"} if "all" in args.methods else set(args.methods)
+    alpha_grid = args.baseline_lambda1_grid
+    cv = dict(n_folds=3, cv_shuffle=CV_SHUFFLE, cv_random_state=CV_RANDOM_STATE)
     all_results = {
         "seed": seed,
         "data_config": {
             "total_samples": args.total_samples,
             "cluster_proportions": args.cluster_proportions,
             "n_vars": args.n_vars,
-            "m": m_val, # This will log the specific list of lengths used if in Random Mode
+            "m": m_val,
             "std": args.std,
             "s0_list": args.s0_list,
+            "graph_type": "UR",
+            "weight_positive_range": [0.2, 0.5],
+            "weight_negative_range": [-0.5, -0.2],
+            "mean": 0.0,
+            "permute": True,
         },
-        "dc_admm_file": "dag_dc_admm_results.json",
-        "notear_pooled": pooled_results,
-        "notear_individual": individual_results,
-        "notear_cluster": cluster_results,
     }
+
+    # DAG-DC-ADMM
+    if "dag_dc_admm" in methods:
+        dc_results = run_dag_dc_admm_experiment(X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth, seed,
+                                                lambda1_grid=args.lambda1_grid, lambda2_grid=args.lambda2_grid,
+                                                tau_grid=args.tau_grid)
+        save_json(os.path.join(out_dir, "dag_dc_admm_results.json"), dc_results)
+        all_results["dc_admm_file"] = "dag_dc_admm_results.json"
+
+    # NOTEARS baselines: Population, Individual, Oracle
+    if "pooled" in methods:
+        all_results["notear_pooled"] = run_notear_experiment_pooled(
+            X_list, W_list_gt, W_centers_gt, clusters_gt, seed, args.std, alpha_grid, **cv)
+        save_json(os.path.join(out_dir, "summary_notear_pooled_CV.json"), all_results["notear_pooled"])
+    if "individual" in methods or "two_step" in methods:
+        individual_results = run_notear_experiment_individual(
+            X_list, W_list_gt, W_centers_gt, clusters_gt, seed, args.std, alpha_grid, **cv)
+        if "individual" in methods:
+            all_results["notear_individual"] = individual_results
+            save_json(os.path.join(out_dir, "summary_notear_individual_CV.json"), individual_results)
+    if "oracle" in methods:
+        all_results["notear_cluster"] = run_notear_experiment_cluster(
+            X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth, seed, args.std, alpha_grid, **cv)
+        save_json(os.path.join(out_dir, "summary_notear_cluster_CV.json"), all_results["notear_cluster"])
+
+    # Two-step baseline: Individual NOTEARS + complete-linkage clustering
+    if "two_step" in methods:
+        two_step = run_two_step_experiment(individual_results, label_truth, args.two_step_tau)
+        save_json(os.path.join(out_dir, "summary_notear_individual_hierarchical.json"),
+                  {**two_step, "seed": seed, "data_config": all_results["data_config"],
+                   "notears_individual": individual_results})
+
     save_json(os.path.join(out_dir, "summary_all_methods.json"), all_results)
 
     print(f"[seed {seed}] Experiment complete. Outputs written to {out_dir}")

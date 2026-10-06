@@ -23,13 +23,7 @@ Generated data and experiment outputs are therefore not included.
 │   ├── cross_validation_updated.py        # 3-fold CV, reconstruction error, graph and clustering metrics
 │   ├── data_generation.py                 # synthetic clustered SEM data generator
 │   ├── NOTEAR.py                          # NOTEARS baselines: population, individual, oracle
-│   ├── experiment.py                      # main entry point: data -> CV -> refit -> all methods, one seed
-│   ├── experiment_notear_individual_hierarchical.py  # two-step baseline (NOTEARS + hierarchical clustering)
-│   ├── experiment_notear_cluster_dense.py # oracle baseline with a denser lambda1 grid (d = 15)
-│   ├── run_three_cluster_two_step.py      # two-step baseline in the three-cluster design
-│   ├── generate_castelletti_data.py       # data export for the DP mixture benchmark
-│   ├── analyze_castelletti_results.py     # evaluation of DP mixture output
-│   ├── dp_mixture/run_castelletti_consonni.R  # wrapper around the DP mixture MCMC code
+│   ├── experiment.py                      # main entry point: one seed, data -> DAG-DC-ADMM and all baselines
 │   └── three_cluster/                     # DAG-DC-ADMM in the three-cluster design (self-contained)
 ├── case_study/
 │   ├── case_study.ipynb                   # preclustering, baselines, DAG-DC-ADMM fit, table and figure
@@ -51,9 +45,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The DP mixture benchmark additionally needs R (4.4 was used) with the packages
-`pcalg`, `gRbase`, `mvtnorm`, and `abind`, and the authors' code (see below).
-
 ---
 
 ## Quick start
@@ -66,8 +57,8 @@ python experiment.py --seed 0 --out_dir ../results --setting_name N50_std1_m300_
   --total_samples 50 --m 300 --std 1 --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5
 ```
 
-One seed fits 64 hyperparameter combinations x 3 folds plus a final refit, and then the three
-NOTEARS baselines. With the default grid this takes about 1-2 hours for n = 50 and much longer
+One seed fits 64 hyperparameter combinations x 3 folds plus a final refit, and then the four
+baselines (Population, Individual, Oracle, Two-step). With the default grid this takes about 1-2 hours for n = 50 and much longer
 for n = 200 on one CPU core.
 
 Each run writes `results/<setting_name>/seed_<seed>/` with
@@ -76,7 +67,11 @@ Each run writes `results/<setting_name>/seed_<seed>/` with
   cluster DAGs, clustering metrics, and graph metrics at thresholds 0.01-0.10;
 - `summary_notear_pooled_CV.json`, `summary_notear_individual_CV.json`,
   `summary_notear_cluster_CV.json`: Population, Individual, and Oracle baselines;
-- `summary_all_methods.json`: data configuration and all baseline results.
+- `summary_notear_individual_hierarchical.json`: Two-step baseline (individual NOTEARS, then
+  complete-linkage clustering cut at `--two_step_tau`, default 0.7);
+- `summary_all_methods.json`: data configuration and baseline results.
+
+`--methods` selects a subset, for example `--methods two_step`.
 
 ---
 
@@ -110,20 +105,7 @@ The reported results use an 80-combination grid with `lambda2 in {0.1, 0.01, 0.0
   --lambda2_grid 0.01 0.001 0.0001 0.00001 0.1
 ```
 
-This produces DAG-DC-ADMM and the Population, Individual, and Oracle baselines.
-
-### Two-step baseline (Tables 1-4)
-
-NOTEARS per subject, then complete-linkage hierarchical clustering with cut height 0.7:
-
-```bash
-python experiment_notear_individual_hierarchical.py --seed $seed --out_dir ../results \
-  --setting_name N50_std1_m300_k06_04 --total_samples 50 --m 300 --std 1 \
-  --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5 \
-  --lambda1_grid 0.0001 0.001 0.01 0.1 --n_folds 3 --tau 0.7
-```
-
-Repeat for the other five settings.
+This produces DAG-DC-ADMM and the Population, Individual, Oracle, and Two-step baselines.
 
 ### Thresholding robustness (Appendix)
 
@@ -132,49 +114,11 @@ outputs (`skeleton_threshold_sweep` in `dag_dc_admm_results.json`).
 
 ### Comparison with a Dirichlet process mixture of Gaussian DAGs (Appendix)
 
-1. Download the authors' code. It is not redistributed here because the repository has no license.
-
-   ```bash
-   git clone https://github.com/FedeCastelletti/bnp_mixture_causal_dags.git third_party/bnp_mixture_causal_dags
-   git -C third_party/bnp_mixture_causal_dags checkout a8018a79eb853af0c85e64f122a60ec55926fb04
-   ```
-
-2. Generate the same simulated data, with all rows of all subjects stacked (sigma = 1, seeds 0-24):
-
-   ```bash
-   cd src
-   python generate_castelletti_data.py --seed $(seq 0 24) --out-dir ../castelletti_consonni_data \
-     --setting-name N50_std1_m300_k06_04_rows --total-samples 50 --m 300 --std 1 \
-     --cluster-proportions 0.6 0.4 --n-vars 5 --s0-list 5 5 --input-mode rows
-   python generate_castelletti_data.py --seed $(seq 0 24) --out-dir ../castelletti_consonni_data \
-     --setting-name N200_std1_m50_k06_04_rows --total-samples 200 --m 50 --std 1 \
-     --cluster-proportions 0.6 0.4 --n-vars 5 --s0-list 5 5 --input-mode rows
-   cd ..
-   ```
-
-3. Run the MCMC (25,000 iterations, 5,000 burn-in):
-
-   ```bash
-   SETTING=N50_std1_m300_k06_04_rows   # or N200_std1_m50_k06_04_rows
-   for seed in $(seq 0 24); do
-     Rscript src/dp_mixture/run_castelletti_consonni.R \
-       --data-dir castelletti_consonni_data/$SETTING/seed_$seed \
-       --out-dir results_dp_mixture/${SETTING}_S25000_burn5000/seed_$seed \
-       --code-dir third_party/bnp_mixture_causal_dags \
-       --seed $seed --S 25000 --burn 5000 --a-alpha 3 --b-alpha 1 \
-       --a-pi 1 --b-pi 2.666666666666667 --y-set 1
-   done
-   ```
-
-4. Evaluate:
-
-   ```bash
-   python src/analyze_castelletti_results.py \
-     --results-dir results_dp_mixture/N50_std1_m300_k06_04_rows_S25000_burn5000 \
-     --data-dir castelletti_consonni_data/N50_std1_m300_k06_04_rows
-   ```
-
-DAG-DC-ADMM results for the same seeds come from the main experiment (sigma = 1).
+The benchmark uses the R code of Castelletti and Consonni (2023), "Bayesian graphical modeling for
+heterogeneous causal effects", *Statistics in Medicine* 42(1):15-32, available at
+https://github.com/FedeCastelletti/bnp_mixture_causal_dags (commit `a8018a7`). That code is not
+redistributed here. It was run with 25,000 MCMC iterations (5,000 burn-in) on the simulated data
+of the main experiment (sigma = 1, seeds 0-24), with all measurements of all subjects stacked.
 
 ### Three-cluster scenario (Appendix)
 
@@ -188,13 +132,16 @@ python experiment_N50_std1_updated.py --seed $seed --out_dir ../../results/three
 
 Scripts: `experiment_N{50,200}_std{05,1,2}_updated.py`.
 
-Two-step baseline (from `src/`):
+Baselines (Population, Individual, Oracle, Two-step) come from the main entry point:
 
 ```bash
-python run_three_cluster_two_step.py --seed $seed --setting N50_std1
+cd src
+python experiment.py --seed $seed --out_dir ../results --setting_name N50_std1_m300_k04_04_02 \
+  --total_samples 50 --m 300 --std 1 --cluster_proportions 0.4 0.4 0.2 --n_vars 5 --s0_list 5 5 5 \
+  --methods pooled individual oracle two_step
 ```
 
-Settings: `N50_std05`, `N50_std1`, `N50_std2`, `N200_std05`, `N200_std1`, `N200_std2`.
+Settings: `n = 50, m = 300` and `n = 200, m = 50`, each with `sigma in {0.5, 1, 2}`.
 
 ### Imbalanced cluster proportions (Appendix)
 
@@ -252,7 +199,7 @@ in the notebook to skip it and only fit the reported model.
   baselines are seeded by the run's `--seed`.
 - `src/algorithm_updated.py` is the exact version used to produce the reported results.
 - Run each seed with one thread (`OMP_NUM_THREADS=1`).
-- One seed needs 1 CPU core and at most 6 GB memory (12 GB for the DP mixture).
+- One seed needs 1 CPU core and at most 6 GB memory.
 
 ---
 
