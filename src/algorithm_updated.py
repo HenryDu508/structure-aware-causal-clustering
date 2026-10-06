@@ -233,13 +233,13 @@ def update_theta(W_list,u,rho2,lambda2,tau,theta_hat_prev):
     gamma = lambda2 / rho2
 
     if np.max(norm_prev) < 1e-12:
-        mask = np.zeros_like(norm_prev, dtype=bool)   # 全部直通
+        mask = np.zeros_like(norm_prev, dtype=bool)  # no pair is soft-thresholded
     else:
         mask = (norm_prev < tau)
     
     # mask = norm_prev < tau  # (n_pairs,)
 
-    frac_mask   = np.mean(mask)                        # 有多少对儿会被软阈
+    frac_mask   = np.mean(mask)
     frac_zero = np.mean(norm_diff[mask] <= gamma) if np.any(mask) else 0.0
     med_prev = np.median(norm_prev) if norm_prev.size > 0 else 0.0
     med_diff = np.median(norm_diff) if norm_diff.size > 0 else 0.0

@@ -35,13 +35,13 @@ def _to_py(x):
 
 def save_artifacts_json_simple(
     out_dir, tag,
-    Wc_est,              # (K,d,d) 或 list[np.ndarray]；若没有可传 None
-    clusters_est,        # list[Iterable[int]]（也可能是 set）
+    Wc_est,  # (K,d,d) or list of arrays; may be None
+    clusters_est,  # list of index sets
     W_list_final,        # (n,d,d)
     label_est,           # (n,)
-    W_cluster_est_list,  # (n,d,d) —— 你目前的定义：簇W已广播到每个样本
+    W_cluster_est_list,  # (n,d,d): cluster W assigned to each subject
     params=None,
-    round_decimals=3     # 为控制体积，可设 None 取消四舍五入
+    round_decimals=3  # None disables rounding
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -93,7 +93,7 @@ def evaluate_best_for_all(
     os.makedirs(out_dir, exist_ok=True)
     results = {}
 
-    # 预定义要扫的阈值
+    # Thresholds to sweep
     thresholds = [0.01, 0.02, 0.03, 0.04, 0.05,0.06,0.07,0.08,0.09,0.1]
 
     for metric in ["mle_mean", "recon_mean", "cov_mean"]:
@@ -117,13 +117,13 @@ def evaluate_best_for_all(
                 thres_value=0.01
             )
 
-        # 4) baseline evaluation（和原来一致）
+        # 4) baseline evaluation
         skeleton_acc_base = average_skelton_accuracy(W_list_gt, W_cluster_est_list, threshold=0.01)
         recon_gt   = compute_total_reconstruction_error(W_centers_gt, clusters_gt,   X_list)
         recon_est  = compute_total_reconstruction_error(Wc_est,        clusters_est, X_list)
         clust_acc  = clustering_overall_metrics(label_truth,           label_est)
 
-        # 5) 扫阈值并保存到 CSV
+        # 5) Sweep thresholds and save to CSV
         sweep_records = []
         for t in thresholds:
             acc_t = average_skelton_accuracy(W_list_gt, W_cluster_est_list, threshold=t)
@@ -133,7 +133,7 @@ def evaluate_best_for_all(
         csv_path = os.path.join(out_dir, f"skeleton_thresholds_{metric}.csv")
         df_sweep.to_csv(csv_path, index=False)
 
-        # 6) bundle into results（把 sweep 结果也放进 summary.json）
+        # 6) bundle into results (include the sweep in summary.json)
         results[metric] = _to_py({
             "best_params":         params,
             "skeleton_accuracy@0.01": skeleton_acc_base,

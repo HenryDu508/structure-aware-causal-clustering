@@ -35,13 +35,13 @@ def _to_py(x):
 
 def save_artifacts_json_simple(
     out_dir, tag,
-    Wc_est,              # (K,d,d) 或 list[np.ndarray]；若没有可传 None
-    clusters_est,        # list[Iterable[int]]（也可能是 set）
+    Wc_est,  # (K,d,d) or list of arrays; may be None
+    clusters_est,  # list of index sets
     W_list_final,        # (n,d,d)
     label_est,           # (n,)
-    W_cluster_est_list,  # (n,d,d) —— 你目前的定义：簇W已广播到每个样本
+    W_cluster_est_list,  # (n,d,d): cluster W assigned to each subject
     params=None,
-    round_decimals=3     # 为控制体积，可设 None 取消四舍五入
+    round_decimals=3  # None disables rounding
 ):
     os.makedirs(out_dir, exist_ok=True)
 

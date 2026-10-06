@@ -233,14 +233,14 @@ def update_theta(W_list,u,rho2,lambda2,tau,theta_hat_prev):
     gamma = lambda2 / rho2
 
     if np.max(norm_prev) < 1e-12:
-        mask = np.zeros_like(norm_prev, dtype=bool)   # 全部直通
+        mask = np.zeros_like(norm_prev, dtype=bool)  # no pair is soft-thresholded
     else:
         mask = (norm_prev < tau)
     
     # mask = norm_prev < tau  # (n_pairs,)
 
-    frac_mask   = np.mean(mask)                        # 有多少对儿会被软阈
-    frac_zero   = np.mean(norm_diff[mask] <= gamma)    # 被直接压到 0 的比例（在被软阈的那部分里）
+    frac_mask   = np.mean(mask)
+    frac_zero   = np.mean(norm_diff[mask] <= gamma)
     med_prev    = np.median(norm_prev)
     med_diff    = np.median(norm_diff)
     
@@ -326,8 +326,8 @@ def optimize_admm(
         # 2. Update theta (using DC-level theta_hat_prev for truncation)
         theta = update_theta(W_list_new, u, rho2, lambda2, tau, theta_hat_prev)
         
-        # === 新：计算标准 residuals（在更新 u 之前！）===
-        theta_old = theta_prev_admm  # ADMM 上一轮的 theta
+        # Residuals (computed before the dual update)
+        theta_old = theta_prev_admm  # theta from the previous ADMM iteration
         # Primal residual: r = theta - (W_i - W_j)
         r = theta - (W_list_new[:, None] - W_list_new[None, :])              # (n,n,d,d)
         # Dual  residual: s = rho2 * (theta - theta_old)
@@ -363,8 +363,8 @@ def optimize_admm(
 
         # Record metrics
         admm_times.append(time.perf_counter() - t0)
-        admm_primal_res.append(r_norm)   # 原来是 W_res
-        admm_dual_res.append(s_norm)    # 现在存 dual residual = rho2 * ||Δθ||
+        admm_primal_res.append(r_norm)
+        admm_dual_res.append(s_norm)  # dual residual rho2 * ||delta theta||
 
         # Check convergence
         tol_r = dual_tol                          
@@ -522,14 +522,14 @@ def build_warm_start_W(X, lambda1):
     zeros_alpha = np.zeros(n)
 
     for i in range(n):
-        W0[i] = update_W_i(i, X[i], W_list=W0, W_list_new=W0,      # 无所谓；rho2=0 下不参与
+        W0[i] = update_W_i(i, X[i], W_list=W0, W_list_new=W0,
             theta_prev_admm=zeros_theta,   # 0
             u=zeros_u,                     # 0
             alpha=zeros_alpha,             # 0
-            rho1=0.0, rho2=0.0,            # 关键：关闭 DAG 与 共识
+            rho1=0.0, rho2=0.0,  # no DAG or fusion terms
             lambda1=lambda1
         )
-        np.fill_diagonal(W0[i], 0.0)      # 稳妥起见再清一次对角
+        np.fill_diagonal(W0[i], 0.0)
     return W0
 
 def optimize_dc_admm(
