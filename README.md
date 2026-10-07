@@ -1,7 +1,8 @@
-# DAG-DC-ADMM: Structure-Aware Clustering and Heterogeneous Causal Graph Learning
+# Structure-Aware Clustering and Heterogeneous Causal Graph Learning
 
-This repository contains the code for the manuscript
-"A Unified Framework for Structure-Aware Clustering and Heterogeneous Causal Graph Learning."
+This repository contains the code for the paper
+"A Unified Framework for Structure-Aware Clustering and Heterogeneous Causal Graph Learning"
+([arXiv:2605.19313](https://arxiv.org/abs/2605.19313)).
 
 DAG-DC-ADMM jointly clusters subjects and learns one directed acyclic graph (DAG) per cluster.
 Each subject has repeated measurements generated from a linear structural equation model (SEM).
@@ -83,11 +84,13 @@ The mapping from the method to the code is in
 ## Citation
 
 ```bibtex
-@article{du2026dagdcadmm,
-  title  = {A Unified Framework for Structure-Aware Clustering and Heterogeneous Causal Graph Learning},
-  author = {Du, Honglin and Liang, Muxuan and Zhong, Xiang},
-  year   = {2026},
-  note   = {Manuscript under review}
+@misc{du2026unified,
+  title         = {A Unified Framework for Structure-Aware Clustering and Heterogeneous Causal Graph Learning},
+  author        = {Du, Honglin and Liang, Muxuan and Zhong, Xiang},
+  year          = {2026},
+  eprint        = {2605.19313},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2605.19313}
 }
 ```
 
