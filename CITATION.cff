@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "Code for: A Unified Framework for Structure-Aware Clustering and Heterogeneous Causal Graph Learning"
+type: software
+authors:
+  - family-names: Du
+    given-names: Honglin
+    affiliation: "Department of Industrial and Systems Engineering, University of Florida"
+  - family-names: Liang
+    given-names: Muxuan
+  - family-names: Zhong
+    given-names: Xiang
+license: MIT
+repository-code: "https://github.com/HenryDu508/structure-aware-causal-clustering"
+version: 1.0.0
+keywords:
+  - causal discovery
+  - directed acyclic graphs
+  - clustering
+  - structural equation models
+  - heterogeneous data
+preferred-citation:
+  type: article
+  title: "A Unified Framework for Structure-Aware Clustering and Heterogeneous Causal Graph Learning"
+  authors:
+    - family-names: Du
+      given-names: Honglin
+    - family-names: Liang
+      given-names: Muxuan
+    - family-names: Zhong
+      given-names: Xiang
+  year: 2026
+  identifiers:
+    - type: other
+      value: "arXiv:2605.19313"
+  url: "https://arxiv.org/abs/2605.19313"
