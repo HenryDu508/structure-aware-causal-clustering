@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
+import os
+import json
 from itertools import product
 from sklearn.model_selection import KFold
-from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import (
     adjusted_rand_score,
     adjusted_mutual_info_score,
@@ -10,44 +11,19 @@ from sklearn.metrics import (
     completeness_score,
     v_measure_score
 )
-from cluster_algo_updated import optimize_dc_admm
+from .dc_admm import optimize_dc_admm
 
 
 
-def evaluate_params(params, fold, X_train, X_val,
-                    max_dc_iter, max_admm_iter, plot_graph):
-    """Evaluate a single parameter combination on a specific fold."""
+def evaluate_params(params, fold, X_train, X_val, max_dc_iter, max_admm_iter, plot_graph):
     lambda1, lambda2, tau, rho1, rho2 = params
-
-    # unpack the five outputs of your updated DC‑ADMM
     cluster_W, clusters, W_list, label_list, W_cluster_list = optimize_dc_admm(
-        X_train,
-        lambda1=lambda1,
-        lambda2=lambda2,
-        tau=tau,
-        rho1=rho1,
-        rho2=rho2,
-        max_dc_iter=max_dc_iter,
-        max_admm_iter=max_admm_iter,
-        plot_graph=plot_graph,
-        thres_value=0.01
+        X_train, lambda1=lambda1, lambda2=lambda2, tau=tau, rho1=rho1, rho2=rho2,
+        max_dc_iter=max_dc_iter, max_admm_iter=max_admm_iter, plot_graph=plot_graph, thres_value=0.01
     )
-
-    # now compute errors using `clusters`
-    cov_error   = compute_total_cov_err(cluster_W, clusters,   X_val)
-    recon_error = compute_total_reconstruction_error(cluster_W, clusters, X_val)
-    mle_error   = compute_average_penalized_mle_error(cluster_W, clusters,   X_val)
-
     return {
-        "fold":        fold,
-        "lambda1":     lambda1,
-        "lambda2":     lambda2,
-        "tau":         tau,
-        "rho1":        rho1,
-        "rho2":        rho2,
-        "mle_error":   mle_error,
-        "cov_error":   cov_error,
-        "recon_error": recon_error
+        "fold": fold, "lambda1": lambda1, "lambda2": lambda2, "tau": tau, "rho1": rho1, "rho2": rho2,
+        "recon_error": compute_total_reconstruction_error(cluster_W, clusters, X_val)
     }
 
 
@@ -57,128 +33,48 @@ def tune_hyperparameters(
     n_folds=3,
     max_dc_iter=10,
     max_admm_iter=15,
-    plot_graph=False
+    plot_graph=False,
+    cv_shuffle=True,
+    cv_random_state=None,
 ):
-    """
-    Sequential grid‑search over params × folds.
-    Returns top5 for each metric and the full CV table.
-    """
-    # 0) alignment check
-    T0 = X_list[0].shape[0]
-    if any(X.shape[0] != T0 for X in X_list):
-        raise ValueError("All X_i must have same time steps.")
+    """Supports different m_i. Returns top5_recon, cv_table."""
+    if not X_list:
+        raise ValueError("X_list must be non-empty.")
     if plot_graph:
-        # plotting per‐fold will clutter; ensure you really want this
         print("Warning: plot_graph=True will produce plots for each fold/param.")
 
-    # 1) prepare splits
-    kf = KFold(n_splits=n_folds, shuffle=False)
-    splits = list(kf.split(X_list[0]))
-
-    # 2) build all param combinations
-    param_names  = list(param_grid.keys())
-    param_combos = list(product(*param_grid.values()))
-
-    # 3) run sequentially
-    records = []
-    for fold, (tr_idx, va_idx) in enumerate(splits):
-        # slice once per fold
-        X_tr = [X[tr_idx] for X in X_list]
-        X_va = [X[va_idx] for X in X_list]
-
-        for combo in param_combos:
-            res = evaluate_params(
-                combo, fold, X_tr, X_va,
-                max_dc_iter, max_admm_iter, plot_graph
-            )
-            records.append(res)
-
-    # 4) aggregate into DataFrame
-    df = pd.DataFrame(records)
-    # compute means across folds
-    cv = (
-        df
-        .groupby(param_names)[["cov_error","recon_error","mle_error"]]
-        .mean()
-        .reset_index()
-        .rename(columns={
-            "cov_error":  "cov_mean",
-            "recon_error":"recon_mean",
-            "mle_error":  "mle_mean"
-        })
-    )
-
-    # 5) extract top5 for each metric
-    def top5(metric):
-        return (
-            cv
-            .nsmallest(5, metric)
-            [param_names + [metric]]
-            .rename(columns={metric: "mean_error"})
-            .to_dict("records")
+    folds_per_X = []
+    for i, Xi in enumerate(X_list):
+        if Xi.shape[0] < n_folds:
+            raise ValueError(f"X_list[{i}] has only {Xi.shape[0]} rows, cannot do {n_folds}-fold CV.")
+        kf = KFold(
+            n_splits=n_folds,
+            shuffle=cv_shuffle,
+            random_state=cv_random_state if cv_shuffle else None,
         )
+        folds_per_X.append(list(kf.split(np.arange(Xi.shape[0]))))
 
-    return top5("mle_mean"), top5("recon_mean"), top5("cov_mean"), cv
+    param_names = list(param_grid.keys())
+    param_combos = list(product(*param_grid.values()))
+    records = []
 
+    for fold in range(n_folds):
+        X_tr = [Xi[folds[fold][0], :] for Xi, folds in zip(X_list, folds_per_X)]
+        X_va = [Xi[folds[fold][1], :] for Xi, folds in zip(X_list, folds_per_X)]
+        for combo in param_combos:
+            records.append(evaluate_params(combo, fold, X_tr, X_va, max_dc_iter, max_admm_iter, plot_graph))
 
-def compute_covariance_error(W, X_i):
-    """
-    Compute the Frobenius‐norm covariance error for a single sample.
-    Error = ‖cov_model(W) – cov_sample(X_i)‖_F
-
-    Parameters:
-      W    (d×d array): representative weight matrix for one cluster.
-      X_i  (m_i×d array): observations for sample i.
-
-    Returns:
-      e_i  (float): Frobenius‐norm error.
-    """
-    m_i, d = X_i.shape
-    if m_i < 2:
-        raise ValueError(f"Need at least 2 observations, got {m_i}")
-
-    cov_sample = np.cov(X_i, rowvar=False, ddof=1)  
-
-    I = np.eye(d)
-    A = I - W
-    try:
-        invA = np.linalg.inv(A)
-    except np.linalg.LinAlgError:
-        invA = np.linalg.pinv(A)
-    cov_model = invA @ invA.T
-    return float(np.linalg.norm(cov_model - cov_sample, ord='fro'))
+    df = pd.DataFrame(records)
+    cv = df.groupby(param_names)[["recon_error"]].mean().reset_index().rename(columns={"recon_error": "recon_mean"})
+    top5_recon = cv.nsmallest(5, "recon_mean")[param_names + ["recon_mean"]].rename(
+        columns={"recon_mean": "mean_error"}
+    ).to_dict("records")
+    return top5_recon, cv
 
 
-def compute_total_cov_err(W_cluster, cluster_label, X_test):
-    """
-    Compute the average covariance error over all test samples.
 
-    Iterates over clusters k and sample indices i∈cluster_label[k], calls
-    compute_covariance_error(W_cluster[k], X_test[i])
 
-    Parameters:
-      W_cluster      : list of d×d repr. weight matrices, one per cluster.
-      cluster_label  : list of sets of test‐sample indices for each cluster.
-      X_test         : list of test samples X_i, each m_i×d.
 
-    Returns:
-      total_error    : mean of all individual errors.
-    """
-    errors = []
-    N = len(X_test)
-    for k, cluster in enumerate(cluster_label):
-        for i in cluster:
-            if not (0 <= i < N):
-                raise IndexError(f"Invalid test index {i}")
-            try:
-                e_i = compute_covariance_error(W_cluster[k], X_test[i])
-            except ValueError:
-                continue
-            errors.append(e_i)
-
-    if not errors:
-        raise ValueError("No valid test samples to compute covariance error.")
-    return float(np.mean(errors))
 
 def compute_reconstruction_error(W_est: np.ndarray, X_i: np.ndarray) -> float:
     """
@@ -200,12 +96,9 @@ def compute_reconstruction_error(W_est: np.ndarray, X_i: np.ndarray) -> float:
     return float(np.sum(residuals**2) / m_i)
 
 
-def compute_total_reconstruction_error(W_cluster,
-                                       cluster_label,
-                                       X_test):
+def compute_total_reconstruction_error(W_cluster, cluster_label, X_test):
     """
     Compute the average reconstruction error over all test samples.
-
     Iterates over each cluster k and each sample index i in cluster_label[k],
     calls compute_reconstruction_error_single(W_cluster[k], X_test[i]),
     and returns the mean over all valid samples.
@@ -380,7 +273,7 @@ def count_accuracy_with_skeleton(W_true, W_est, threshold=0.01):
         'dag_nnz': dag_nnz
     }
 
-def average_skelton_accuracy(W_true_list, W_est_list, threshold=0.01):
+def average_skeleton_accuracy(W_true_list, W_est_list, threshold=0.01):
     """
     Compute average (macro‑avg) of count_accuracy over lists of weight matrices.
 
@@ -417,123 +310,3 @@ def clustering_overall_metrics(y_true, y_pred, average_method='arithmetic'):
     }
 
 
-# def clustering_overall_metrics(y_true, y_pred):
-#     """
-#     Align y_pred to y_true (handles extra clusters) and compute:
-#       - TP, FP, FN counts
-#       - precision, recall, accuracy
-
-#     Args:
-#         y_true (array-like of shape [N,]): true labels
-#         y_pred (array-like of shape [N,]): predicted labels (may have extra classes)
-
-#     Returns:
-#         dict: {
-#           'TP': int,
-#           'FP': int,
-#           'FN': int,
-#           'precision': float,
-#           'recall': float,
-#           'accuracy': float,
-#           'y_pred_aligned': np.ndarray
-#         }
-#     """
-#     y_true = np.asarray(y_true)
-#     y_pred = np.asarray(y_pred)
-#     if y_true.shape != y_pred.shape:
-#         raise ValueError("y_true and y_pred must have same length")
-
-#     # 1) Build confusion matrix of size (K_true, K_pred)
-#     labels_true = np.unique(y_true)
-#     labels_pred = np.unique(y_pred)
-#     Kt, Kp = labels_true.size, labels_pred.size
-
-#     cm = np.zeros((Kt, Kp), int)
-#     for t, p in zip(y_true, y_pred):
-#         # find index positions explicitly
-#         i = np.nonzero(labels_true == t)[0][0]
-#         j = np.nonzero(labels_pred == p)[0][0]
-#         cm[i, j] += 1
-
-#     # 2) Hungarian matching to maximize correct assignments
-#     row_ind, col_ind = linear_sum_assignment(-cm)
-#     mapping = { labels_pred[j]: labels_true[i]
-#                 for i, j in zip(row_ind, col_ind) }
-#     # any extra predicted label → dummy mismatch (-1)
-#     for p in labels_pred:
-#         mapping.setdefault(p, -1)
-
-#     # 3) Remap all predictions
-#     y_aligned = np.array([mapping[p] for p in y_pred], dtype=int)
-
-#     # 4) Compute counts and rates
-#     N  = len(y_true)
-#     TP = int((y_aligned == y_true).sum())
-#     FP = N - TP
-#     FN = FP   # in multiclass micro setting, FP == FN
-
-#     precision = TP / (TP + FP) if TP + FP else 0.0
-#     recall    = TP / (TP + FN) if TP + FN else 0.0
-#     accuracy  = TP / N
-
-#     return {
-#         'TP': TP,
-#         'FP': FP,
-#         'FN': FN,
-#         'precision': precision,
-#         'recall': recall,
-#         'accuracy': accuracy,
-#         'y_pred_aligned': y_aligned
-#     }
-
-def evaluate_and_save(
-    out_dir: str,
-    W_true_list,
-    W_cluster_true,
-    cluster_label_true,
-    X_list,
-    W_cluster_est,
-    cluster_label_est,
-    W_est_list,
-    label_pred,
-):
-    """
-    Runs graph‐recovery, reconstruction, and clustering‐accuracy metrics
-    and writes both a JSON and a one‐row CSV to `out_dir`.
-    """
-    os.makedirs(out_dir, exist_ok=True)
-
-    # 1) Macro‐avg graph‐recovery
-    graph_metrics = average_skelton_accuracy(W_true_list, W_est_list, threshold=0.01)
-
-    # 2) Recon errors
-    recon_true = compute_total_reconstruction_error(
-        W_cluster_true, cluster_label_true, X_list
-    )
-    recon_est  = compute_total_reconstruction_error(
-        W_cluster_est,  cluster_label_est,  X_list
-    )
-
-    # 3) Clustering accuracy
-    cluster_metrics = clustering_overall_metrics(
-        y_true=[i for cl in cluster_label_true for i in cl],
-        y_pred=label_pred
-    )
-
-    # Combine everything
-    results = {}
-    results.update({f"graph_{k}": v for k, v in graph_metrics.items()})
-    results["recon_error_true"] = recon_true
-    results["recon_error_est"]  = recon_est
-    results.update(cluster_metrics)
-
-    # Save JSON
-    with open(os.path.join(out_dir, "results.json"), "w") as f:
-        json.dump(results, f, indent=2)
-
-    # Save one‐row CSV
-    pd.DataFrame([results]).to_csv(
-        os.path.join(out_dir, "results.csv"), index=False
-    )
-
-    return results

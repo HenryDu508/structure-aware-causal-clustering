@@ -4,16 +4,17 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-import argparse, random, json
+import argparse, random, json, sys
 import numpy as np, pandas as pd
 
-from data_generation import generate_clustered_data
-from cross_validation_updated import (
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from dagdc.data_generation import generate_clustered_data
+from dagdc.cross_validation import (
     tune_hyperparameters, compute_total_reconstruction_error,
     average_skeleton_accuracy, clustering_overall_metrics
 )
-from algorithm_updated import optimize_dc_admm, complete_linkage_clusters
-from NOTEAR import (
+from dagdc.dc_admm import optimize_dc_admm, complete_linkage_clusters
+from dagdc.notears import (
     run_notear_experiment_pooled,
     run_notear_experiment_individual,
     run_notear_experiment_cluster,

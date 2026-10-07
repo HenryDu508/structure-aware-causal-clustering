@@ -18,17 +18,23 @@ Generated data and experiment outputs are therefore not included.
 
 ```
 .
-├── src/                                   # run all Python scripts from this directory
-│   ├── algorithm_updated.py               # DAG-DC-ADMM optimizer (optimize_dc_admm)
-│   ├── cross_validation_updated.py        # 3-fold CV, reconstruction error, graph and clustering metrics
-│   ├── data_generation.py                 # synthetic clustered SEM data generator
-│   ├── NOTEAR.py                          # NOTEARS baselines: population, individual, oracle
-│   ├── experiment.py                      # main entry point: one seed, data -> DAG-DC-ADMM and all baselines
-│   └── three_cluster/                     # DAG-DC-ADMM in the three-cluster design (self-contained)
+├── src/dagdc/                      # method library
+│   ├── dc_admm.py                  # DAG-DC-ADMM optimizer (optimize_dc_admm)
+│   ├── cross_validation.py         # 3-fold CV, reconstruction error, graph and clustering metrics
+│   ├── data_generation.py          # synthetic clustered SEM data
+│   ├── notears.py                  # NOTEARS baselines: Population, Individual, Oracle
+│   └── three_cluster/              # library version used for the three-cluster DAG-DC-ADMM runs
+├── experiments/
+│   ├── run_experiment.py           # one seed: data -> DAG-DC-ADMM and all baselines
+│   └── run_three_cluster.py        # one seed of the three-cluster scenario
+├── examples/                       # a small end-to-end example
 ├── case_study/
-│   ├── case_study.ipynb                   # preclustering, baselines, DAG-DC-ADMM fit, table and figure
-│   ├── case_utils.py                      # preprocessing, NOTEARS baselines, DAG-DC-ADMM for the case study
-│   └── data/                              # Sachs et al. (2005) flow cytometry data (9 CSV files)
+│   ├── case_study.ipynb            # preclustering, baselines, DAG-DC-ADMM fit, table and figure
+│   ├── case_utils.py               # case-study preprocessing and solver
+│   └── data/                       # Sachs et al. (2005) flow cytometry data (9 CSV files)
+├── references/
+│   ├── method_to_code.md           # each part of the method and the function that implements it
+│   └── reproducing_experiments.md  # command for every experiment in the paper, output files
 ├── requirements.txt
 └── LICENSE
 ```
@@ -49,157 +55,28 @@ pip install -r requirements.txt
 
 ## Quick start
 
-Run one seed of the main experiment on a laptop (small-sample/long-series, sigma = 1):
+Run the small example (about 7 minutes on one CPU core):
 
 ```bash
-cd src
-python experiment.py --seed 0 --out_dir ../results --setting_name N50_std1_m300_k06_04 \
+python examples/two_cluster_example.py
+```
+
+See [`examples/README.md`](examples/README.md) for what it does and its expected output.
+
+Run one seed of the main experiment, with DAG-DC-ADMM and all four baselines
+(Population, Individual, Oracle, Two-step):
+
+```bash
+python experiments/run_experiment.py --seed 0 --out_dir results --setting_name N50_std1_m300_k06_04 \
   --total_samples 50 --m 300 --std 1 --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5
 ```
 
-One seed fits 64 hyperparameter combinations x 3 folds plus a final refit, and then the four
-baselines (Population, Individual, Oracle, Two-step). With the default grid this takes about 1-2 hours for n = 50 and much longer
-for n = 200 on one CPU core.
+This takes about 1-2 hours on one CPU core. `--methods` selects a subset of methods.
 
-Each run writes `results/<setting_name>/seed_<seed>/` with
-
-- `dag_dc_admm_results.json`: CV table, selected `(lambda1, lambda2, tau)`, estimated clusters and
-  cluster DAGs, clustering metrics, and graph metrics at thresholds 0.01-0.10;
-- `summary_notear_pooled_CV.json`, `summary_notear_individual_CV.json`,
-  `summary_notear_cluster_CV.json`: Population, Individual, and Oracle baselines;
-- `summary_notear_individual_hierarchical.json`: Two-step baseline (individual NOTEARS, then
-  complete-linkage clustering cut at `--two_step_tau`, default 0.7);
-- `summary_all_methods.json`: data configuration and baseline results.
-
-`--methods` selects a subset, for example `--methods two_step`.
-
----
-
-## Reproducing the experiments
-
-The paper uses 50 seeds (0-49) per setting. Seeds are independent, so they can be run in
-parallel on any machine. Each command below lists the script arguments; run it for every seed:
-
-```bash
-cd src
-export OMP_NUM_THREADS=1
-for seed in $(seq 0 49); do
-  python experiment.py --seed $seed --out_dir ../results <arguments below>
-done
-```
-
-### Main two-cluster experiments (Section 5, Tables 1-4)
-
-Six settings: `(n, m) in {(50, 300), (200, 50)}` and `sigma in {0.5, 1, 2}`.
-The reported results use an 80-combination grid with `lambda2 in {0.1, 0.01, 0.001, 0.0001, 0.00001}`.
-
-```bash
-# Small-sample/long-series (repeat with --std 0.5 and --std 2, renaming --setting_name)
---setting_name N50_std1_m300_k06_04 --total_samples 50 --m 300 --std 1 \
-  --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5 \
-  --lambda2_grid 0.01 0.001 0.0001 0.00001 0.1
-
-# Large-sample/short-series
---setting_name N200_std1_m50_k06_04 --total_samples 200 --m 50 --std 1 \
-  --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5 \
-  --lambda2_grid 0.01 0.001 0.0001 0.00001 0.1
-```
-
-This produces DAG-DC-ADMM and the Population, Individual, Oracle, and Two-step baselines.
-
-### Thresholding robustness (Appendix)
-
-No extra runs are needed. The threshold sweep (0.01-0.10) is saved in the main-experiment
-outputs (`skeleton_threshold_sweep` in `dag_dc_admm_results.json`).
-
-### Comparison with a Dirichlet process mixture of Gaussian DAGs (Appendix)
-
-The benchmark uses the R code of Castelletti and Consonni (2023), "Bayesian graphical modeling for
-heterogeneous causal effects", *Statistics in Medicine* 42(1):15-32, available at
-https://github.com/FedeCastelletti/bnp_mixture_causal_dags (commit `a8018a7`). That code is not
-redistributed here. It was run with 25,000 MCMC iterations (5,000 burn-in) on the simulated data
-of the main experiment (sigma = 1, seeds 0-24), with all measurements of all subjects stacked.
-
-### Three-cluster scenario (Appendix)
-
-True proportions 0.4/0.4/0.2, five edges per cluster. DAG-DC-ADMM uses the self-contained code
-in `src/three_cluster/`, one script per setting:
-
-```bash
-cd src/three_cluster
-python experiment_N50_std1_updated.py --seed $seed --out_dir ../../results/three_cluster/N50_std1
-```
-
-Scripts: `experiment_N{50,200}_std{05,1,2}_updated.py`.
-
-Baselines (Population, Individual, Oracle, Two-step) come from the main entry point:
-
-```bash
-cd src
-python experiment.py --seed $seed --out_dir ../results --setting_name N50_std1_m300_k04_04_02 \
-  --total_samples 50 --m 300 --std 1 --cluster_proportions 0.4 0.4 0.2 --n_vars 5 --s0_list 5 5 5 \
-  --methods pooled individual oracle two_step
-```
-
-Settings: `n = 50, m = 300` and `n = 200, m = 50`, each with `sigma in {0.5, 1, 2}`.
-
-### Imbalanced cluster proportions (Appendix)
-
-`n = 50`, `m = 300`, `sigma = 1`, default 64-combination grid:
-
-```bash
---setting_name N50_std1_m300_k08_02 --total_samples 50 --m 300 --std 1 \
-  --cluster_proportions 0.8 0.2 --n_vars 5 --s0_list 5 5
---setting_name N50_std1_m300_k09_01 --total_samples 50 --m 300 --std 1 \
-  --cluster_proportions 0.9 0.1 --n_vars 5 --s0_list 5 5
-```
-
-The 0.6/0.4 row is the main experiment.
-
-### Unequal measurement sizes (Appendix)
-
-`--m 0` draws each `m_i` from `{50, 60, ..., 300}` using the seed:
-
-```bash
---setting_name N50_std1_mlist_k06_04  --total_samples 50 --m 0 --std 1   \
-  --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5
---setting_name N50_std05_mlist_k06_04 --total_samples 50 --m 0 --std 0.5 \
-  --cluster_proportions 0.6 0.4 --n_vars 5 --s0_list 5 5
-```
-
-### Higher-dimensional setting (Appendix)
-
-`d = 15`, 50 edges per cluster, and the `tau` grid scaled by `d / 5`:
-
-```bash
---setting_name N50_std1_m300_k06_04_p15_s050_tau3 --total_samples 50 --m 300 --std 1 \
-  --cluster_proportions 0.6 0.4 --n_vars 15 --s0_list 50 50 --tau_grid 0.15 0.3 1.2 2.1
-```
-
-### Case study
-
-The flow cytometry data of Sachs et al. (2005) are included in `case_study/data/`
-(source: Science 308(5721):523-529, doi:10.1126/science.1105809; see `case_study/data/README.md`).
-Start Jupyter from `case_study/` and run `case_study.ipynb`. It
-
-1. splits each perturbation into subpopulations (PCA to 80% variance, K-means with the smallest
-   k whose silhouette is within 1% of the maximum, subpopulations with fewer than 20 cells removed),
-2. fits the pooled-population and per-perturbation NOTEARS models with 3-fold CV,
-3. runs the DAG-DC-ADMM grid search and fits the reported model,
-4. builds the reconstruction-error table and the adjacency-matrix figure.
-
-The DAG-DC-ADMM grid search (224 combinations x 3 folds) is the slow step. Set `RUN_CV = False`
-in the notebook to skip it and only fit the reported model.
-
----
-
-## Reproducibility notes
-
-- Data generation, CV fold splits (`KFold(shuffle=True, random_state=seed)`), and NOTEARS
-  baselines are seeded by the run's `--seed`.
-- `src/algorithm_updated.py` is the exact version used to produce the reported results.
-- Run each seed with one thread (`OMP_NUM_THREADS=1`).
-- One seed needs 1 CPU core and at most 6 GB memory.
+The commands for all experiments in the paper are in
+[`references/reproducing_experiments.md`](references/reproducing_experiments.md).
+The mapping from the method to the code is in
+[`references/method_to_code.md`](references/method_to_code.md).
 
 ---
 

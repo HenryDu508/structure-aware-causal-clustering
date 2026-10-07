@@ -1,5 +1,5 @@
 """
-cluster_algo.py
+DAG-DC-ADMM optimizer.
 
 This module provides functions for:
 - Loss and gradient computation for reconstruction loss.

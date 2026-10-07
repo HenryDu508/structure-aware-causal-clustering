@@ -1,5 +1,5 @@
 """
-data_generation.py
+Synthetic clustered linear SEM data.
 
 This module provides functions for:
 - Generating initial W_list via NO-TEARS lasso.

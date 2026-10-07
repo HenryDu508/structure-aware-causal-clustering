@@ -1,5 +1,5 @@
 """
-NOTEAR.py
+NOTEARS baselines (Population, Individual, Oracle) and the NOTEARS solver.
 
 This module provides functions to learn DAG structures using the NO TEARS approach:
 - notears_linear_raw: solves the constrained optimization for linear SEMs.
@@ -14,7 +14,7 @@ import scipy.linalg as slin
 from scipy.special import expit as sigmoid
 import warnings
 from sklearn.model_selection import KFold
-from cross_validation_updated import (
+from .cross_validation import (
     compute_reconstruction_error,
     compute_total_reconstruction_error,
     average_skeleton_accuracy,

@@ -1,24 +1,45 @@
 #!/usr/bin/env python3
 """
-experiment.py
+DAG-DC-ADMM in the three-cluster scenario (proportions 0.4/0.4/0.2, five edges per cluster).
 
-Run one full experiment (data generation → hyperparameter tuning → final fit → evaluation)
-for a given random seed.
+Run one seed of one setting: data generation, CV over (lambda1, lambda2, tau), final fit, evaluation.
 """
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 
 import argparse
-import random
-import numpy as np
-import os
 import json
+import random
+import sys
+
+import numpy as np
 import pandas as pd
 
-from data_generation import generate_clustered_data
-from cross_validation_updated import tune_hyperparameters, compute_total_reconstruction_error, average_skelton_accuracy, clustering_overall_metrics
-from cluster_algo_updated import optimize_dc_admm
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from dagdc.three_cluster.data_generation import generate_clustered_data
+from dagdc.three_cluster.cross_validation import tune_hyperparameters, compute_total_reconstruction_error, average_skelton_accuracy, clustering_overall_metrics
+from dagdc.three_cluster.dc_admm import optimize_dc_admm
+
+DEFAULT_GRID = {
+    "lambda1": [0.0001, 0.001, 0.01, 0.1],
+    "lambda2": [0.01, 0.001, 0.0001, 0.00001],
+    "tau":     [0.05, 0.1, 0.4, 0.7],
+    "rho1":    [0.1],
+    "rho2":    [0.05],
+}
+
+# (number of subjects, measurements per subject, noise std, CV grid) used in the paper
+SETTINGS = {
+    "N50_std05":  dict(total_samples=50,  m=300, std=0.5, grid=DEFAULT_GRID),
+    "N50_std1":   dict(total_samples=50,  m=300, std=1,   grid=DEFAULT_GRID),
+    "N50_std2":   dict(total_samples=50,  m=300, std=2,   grid=DEFAULT_GRID),
+    "N200_std05": dict(total_samples=200, m=50,  std=0.5, grid=DEFAULT_GRID),
+    "N200_std1":  dict(total_samples=200, m=50,  std=1,   grid=DEFAULT_GRID),
+    "N200_std2":  dict(total_samples=200, m=50,  std=2,
+                       grid={"lambda1": [0.0001, 0.01, 0.1], "lambda2": [0.1, 0.01, 0.001, 0.0001],
+                             "tau": [0.1, 0.4, 0.7], "rho1": [0.1], "rho2": [0.05]}),
+}
 
 
 def _to_py(x):
@@ -32,7 +53,7 @@ def _to_py(x):
     if isinstance(x, (list, tuple)):
         return type(x)(_to_py(v) for v in x)
     return x
-
+    
 def save_artifacts_json_simple(
     out_dir, tag,
     Wc_est,  # (K,d,d) or list of arrays; may be None
@@ -71,6 +92,7 @@ def save_artifacts_json_simple(
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return json_path
+    
 
 def evaluate_best_for_all(
     out_dir,
@@ -129,7 +151,7 @@ def evaluate_best_for_all(
             "clustering_accuracy":      clust_acc,
             "sweep_csv":                csv_path
         })
-        
+
         artifacts_json = save_artifacts_json_simple(
             out_dir=out_dir, tag=f"{metric}_full",
             Wc_est=Wc_est,
@@ -149,74 +171,49 @@ def evaluate_best_for_all(
 
 
 def main():
-    # 1) Parse command‑line arguments
-    p = argparse.ArgumentParser(description="Run experiment for one seed")
+    p = argparse.ArgumentParser(description="Run the three-cluster experiment for one seed")
+    p.add_argument("--setting", choices=list(SETTINGS), required=True)
     p.add_argument("--seed", type=int, required=True, help="Random seed")
     p.add_argument("--out_dir", type=str, default="results", help="Base output directory (default: results)")
     args = p.parse_args()
-    seed = args.seed
-    base_out_dir = args.out_dir
+    seed, cfg = args.seed, SETTINGS[args.setting]
 
-    # 2) Seed RNGs
     random.seed(seed)
     np.random.seed(seed)
 
-
     X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth = generate_clustered_data(
-        total_samples=200,
-        cluster_proportions=[0.4, 0.4,0.2],
+        total_samples=cfg["total_samples"],
+        cluster_proportions=[0.4, 0.4, 0.2],
         n_vars=5,
-        m=50,
+        m=cfg["m"],
         W_pos_range=(0.2, 0.5),
         W_neg_range=(-0.5, -0.2),
         mean=0.0,
-        std=1,
-        s0_list=[5, 5, 5],           # Pass per-cluster edge counts
-        graph_type="UR",              # UR ensures edges are in upper triangle
+        std=cfg["std"],
+        s0_list=[5, 5, 5],
+        graph_type="UR",
         seed=seed,
-        permute=True                 # Disable permutation to maintain upper-triangular form
+        permute=True
     )
 
-
-    # 4) Hyperparameter grid
-    param_grid = {
-            'lambda1': [0.0001, 0.001, 0.01, 0.1],     
-            'lambda2': [0.01, 0.001, 0.0001, 0.00001],
-            'tau':     [0.05, 0.1, 0.4, 0.7],          
-            'rho1':    [0.1],                          # 1 value
-            'rho2':    [0.05]                          # 1 value
-    }
-
-    # 5) Cross-validate
     top5_mle, top5_recon, top5_cov, cv_table = tune_hyperparameters(
         X_list,
-        param_grid,
+        cfg["grid"],
         n_folds=3,
         max_dc_iter=10,
         max_admm_iter=15,
         plot_graph=False
     )
 
-    # 6) Save CV results and top5
-    out_dir = os.path.join(base_out_dir, f"seed_{seed}")
+    out_dir = os.path.join(args.out_dir, f"seed_{seed}")
     os.makedirs(out_dir, exist_ok=True)
     cv_table.to_csv(os.path.join(out_dir, "cv_results.csv"), index=False)
     for name, data in [('top5_mle', top5_mle), ('top5_recon', top5_recon), ('top5_cov', top5_cov)]:
         with open(os.path.join(out_dir, f"{name}.json"), 'w') as f:
             json.dump(data, f, indent=2)
 
-    # 7) Evaluate best-for-each-metric and save summary
-    summary = evaluate_best_for_all(
-        out_dir,
-        cv_table,
-        X_list,
-        W_list_gt,
-        W_centers_gt,
-        clusters_gt,
-        label_truth
-    )
-
-    print(f"[seed {seed}] Experiment complete. Summary written to {out_dir}/summary.json")
+    evaluate_best_for_all(out_dir, cv_table, X_list, W_list_gt, W_centers_gt, clusters_gt, label_truth)
+    print(f"[{args.setting} seed {seed}] Experiment complete. Summary written to {out_dir}/summary.json")
 
 if __name__ == "__main__":
     main()

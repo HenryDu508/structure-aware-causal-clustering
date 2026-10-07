@@ -1,5 +1,5 @@
 """
-NOTEAR.py
+NOTEARS solver used by the three-cluster data generator.
 
 This module provides functions to learn DAG structures using the NO TEARS approach:
 - notears_linear_raw: solves the constrained optimization for linear SEMs.

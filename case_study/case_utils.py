@@ -1,7 +1,7 @@
 """Preprocessing, DAG-DC-ADMM, NOTEARS baselines and plots for the Sachs et al. (2005) case study.
 
 The DAG-DC-ADMM solver here is the version used for the case study. It differs from
-src/algorithm_updated.py only in the final clustering step, which cuts the complete-linkage
+src/dagdc/dc_admm.py only in the final clustering step, which cuts the complete-linkage
 dendrogram at the midpoint of its largest height jump.
 """
 import os

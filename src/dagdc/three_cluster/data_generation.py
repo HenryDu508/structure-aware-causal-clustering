@@ -1,5 +1,5 @@
 """
-data_generation.py
+Synthetic clustered linear SEM data.
 
 This module provides functions for:
 - Generating initial W_list via NO-TEARS lasso.
@@ -12,7 +12,7 @@ This module provides functions for:
 import numpy as np
 import networkx as nx
 from typing import List, Tuple
-from NOTEAR import from_numpy_lasso2
+from .notears import from_numpy_lasso2
 from numpy.random import default_rng
 
 
