@@ -8,8 +8,10 @@ authors:
     affiliation: "Department of Industrial and Systems Engineering, University of Florida"
   - family-names: Liang
     given-names: Muxuan
+    affiliation: "Department of Biostatistics, MD Anderson Cancer Center, Houston, TX 77030, USA"
   - family-names: Zhong
     given-names: Xiang
+    affiliation: "Department of Industrial and Systems Engineering, University of Florida"
 license: MIT
 repository-code: "https://github.com/HenryDu508/structure-aware-causal-clustering"
 version: 1.0.0
